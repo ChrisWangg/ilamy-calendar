@@ -705,7 +705,7 @@ describe('hourly row sizing and overflow', () => {
 	for (const grouped of [false, true]) {
 		test(`adjacent events use one placeholder and no false overflow (grouped=${grouped})`, () => {
 			renderHours(
-				[eventAt('a', '09:01', '09:17'), eventAt('b', '09:17', '09:59')],
+				[eventAt('a', '09:01', '09:25'), eventAt('b', '09:25', '09:59')],
 				1,
 				grouped
 			)
@@ -719,9 +719,9 @@ describe('hourly row sizing and overflow', () => {
 		test(`counts only genuinely hidden events (grouped=${grouped})`, () => {
 			renderHours(
 				[
-					eventAt('a', '09:01', '09:17'),
-					eventAt('b', '09:17', '09:59'),
-					eventAt('hidden', '09:18', '09:45'),
+					eventAt('a', '09:01', '09:25'),
+					eventAt('b', '09:25', '09:59'),
+					eventAt('hidden', '09:26', '09:45'),
 				],
 				1,
 				grouped

@@ -89,16 +89,16 @@ describe('horizontal column layouts', () => {
 
 	it('counts adjacent chains once per row and genuine overlaps as hidden', () => {
 		const events = [
-			at('a', '09:01', '09:17'),
-			at('b', '09:17', '09:31'),
-			at('c', '09:31', '09:59'),
-			at('hidden', '09:18', '09:30'),
+			at('a', '09:01', '09:25'),
+			at('b', '09:25', '09:49'),
+			at('c', '09:49', '10:13'),
+			at('hidden', '09:26', '09:48'),
 		]
 		expect(counts(events, 1)).toEqual([
 			[0, 0],
 			[0, 0],
 			[1, 1],
-			[0, 0],
+			[1, 0],
 			[0, 0],
 		])
 	})
@@ -1229,6 +1229,149 @@ describe.each([
 	}
 )
 
+describe('minimum horizontal bar length', () => {
+	const columns = Array.from({ length: 3 }, (_, index) =>
+		dayjs('2025-03-12T09:00:00.000Z').add(index, 'hour')
+	)
+	const at = (id: string, start: string, end: string) =>
+		mkEvent(id, `2025-03-12T${start}Z`, `2025-03-12T${end}Z`)
+	const layout = (events: CalendarEvent[], dayMaxEvents = 3) =>
+		layoutHorizontal({ days: columns, events, dayMaxEvents, gridType: 'hour' })
+
+	for (const [nextStart, expectedRow] of [
+		['09:01:00.000', 1],
+		['09:23:59.999', 1],
+		['09:24:00.000', 0],
+		['09:24:00.001', 0],
+	] as const) {
+		it(`packs the displayed minimum before an event at ${nextStart}`, () => {
+			const first = at('short', '09:00:00.000', '09:01:00.000')
+			const next = at('next', nextStart, '10:00:00.000')
+			const { positionedEvents } = layout([next, first])
+			expect(positionedEvents.map(({ row }) => row)).toEqual([0, expectedRow])
+			expect(positionedEvents.at(0)?.width).toBeCloseTo((0.4 / 3) * 100, 8)
+			expect(positionedEvents.at(0)?.event).toBe(first)
+			expect(first.end.toISOString()).toBe('2025-03-12T09:01:00.000Z')
+		})
+	}
+
+	it('keeps all minute-aligned minimum boundaries half-open', () => {
+		const firstColumn = dayjs('2025-03-12T00:00:00.000Z')
+		const columns = [firstColumn]
+		for (let minute = 0; minute <= 35; minute++) {
+			const start = firstColumn.add(minute, 'minute')
+			const first = {
+				id: 'first',
+				title: 'first',
+				start,
+				end: start.add(1, 'minute'),
+			}
+			const nextStart = start.add(24, 'minute')
+			const next = {
+				id: 'next',
+				title: 'next',
+				start: nextStart,
+				end: nextStart.add(1, 'minute'),
+			}
+			const { positionedEvents } = layoutHorizontal({
+				days: columns,
+				events: [first, next],
+				dayMaxEvents: 1,
+				gridType: 'hour',
+			})
+			expect(positionedEvents.map(({ row }) => row)).toEqual([0, 0])
+		}
+	})
+
+	it('retains exact widths above the minimum and the zero-duration fallback', () => {
+		const { positionedEvents } = layout([
+			at('long', '09:17:00.000', '10:17:00.000'),
+			at('instant', '11:00:00.000', '11:00:00.000'),
+		])
+		expect(positionedEvents).toHaveLength(2)
+		for (const { width } of positionedEvents) {
+			expect(width).toBeCloseTo(100 / 3, 8)
+		}
+	})
+
+	it('clips a short bar at the right edge without shifting its start', () => {
+		const { positionedEvents } = layout([
+			at('edge', '11:59:00.000', '12:00:00.000'),
+		])
+		const placed = positionedEvents.at(0)
+		expect(placed?.left).toBeCloseTo(((2 + 59 / 60) / 3) * 100, 8)
+		expect(placed?.width).toBeCloseTo((1 / 60 / 3) * 100, 8)
+		expect(placed?.isTruncatedEnd).toBe(false)
+	})
+
+	it('applies the minimum after clipping an event at the visible start', () => {
+		const { positionedEvents } = layout([
+			at('clipped', '08:59:00.000', '09:01:00.000'),
+		])
+		const placed = positionedEvents.at(0)
+		expect(placed?.left).toBe(0)
+		expect(placed?.width).toBeCloseTo((0.4 / 3) * 100, 8)
+		expect(placed?.isTruncatedStart).toBe(true)
+	})
+
+	it('reserves the displayed spill in an otherwise empty column', () => {
+		const { columnLayouts } = layout([
+			at('blocker', '09:00:00.000', '10:00:00.000'),
+			at('short', '09:50:00.000', '09:51:00.000'),
+		])
+		expect(
+			columnLayouts.map(({ events, rowCount, hiddenCount }) => ({
+				ids: events.map(({ id }) => id),
+				rowCount,
+				hiddenCount,
+			}))
+		).toEqual([
+			{ ids: ['blocker', 'short'], rowCount: 2, hiddenCount: 0 },
+			{ ids: [], rowCount: 2, hiddenCount: 0 },
+			{ ids: [], rowCount: 0, hiddenCount: 0 },
+		])
+	})
+
+	it('does not subtract a spilled bar from the next column hidden count', () => {
+		const events = [
+			at('blocker', '09:00:00.000', '10:00:00.000'),
+			at('short', '09:50:00.000', '09:51:00.000'),
+			at('next', '10:00:00.000', '11:00:00.000'),
+			at('hidden', '10:01:00.000', '11:00:00.000'),
+		]
+		const { positionedEvents, columnLayouts } = layout(events, 2)
+		expect(positionedEvents.map(({ event, row }) => [event.id, row])).toEqual([
+			['blocker', 0],
+			['short', 1],
+			['next', 0],
+		])
+		expect(columnLayouts.at(1)).toEqual({
+			events: events.slice(2),
+			rowCount: 2,
+			hiddenCount: 1,
+		})
+	})
+
+	it('applies the same minimum to a suffix placed after a blocked start', () => {
+		const { positionedEvents, columnLayouts } = layout(
+			[
+				at('blocker', '09:00:00.000', '10:00:00.000'),
+				at('suffix', '09:59:00.000', '10:01:00.000'),
+			],
+			1
+		)
+		expect(positionedEvents.at(1)).toMatchObject({
+			row: 0,
+			isTruncatedStart: true,
+		})
+		expect(positionedEvents.at(1)?.left).toBeCloseTo(100 / 3, 8)
+		expect(positionedEvents.at(1)?.width).toBeCloseTo((0.4 / 3) * 100, 8)
+		expect(columnLayouts.map(({ hiddenCount }) => hiddenCount)).toEqual([
+			1, 0, 0,
+		])
+	})
+})
+
 describe('hour-axis row reuse', () => {
 	const hours = Array.from({ length: 12 }, (_, index) =>
 		dayjs('2026-10-28T07:00:00.000Z').add(index, 'hour')
@@ -1251,11 +1394,11 @@ describe('hour-axis row reuse', () => {
 		})
 	}
 
-	it('reuses one row for successive events inside the same hour, even at the limit', () => {
+	it('reuses one row for successive minimum-length events, even at the limit', () => {
 		const events = [
-			eventAt('a', '09:01', '09:17'),
-			eventAt('b', '09:17', '09:31'),
-			eventAt('c', '09:31', '09:59'),
+			eventAt('a', '09:01', '09:25'),
+			eventAt('b', '09:25', '09:49'),
+			eventAt('c', '09:49', '10:13'),
 		]
 		const placed = pack(events, 1)
 		expect(placed).toHaveLength(3)

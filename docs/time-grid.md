@@ -188,8 +188,8 @@ When a full span cannot fit, the slot search still tries later start columns
 to preserve its visible suffix. Day-spanning events retain priority over
 single-day entries; hourly events retain chronological placement.
 
-Hour-axis bars reserve their exact half-open intervals when sharing rows: a
-07:00–09:17 event and a 09:17–11:00 event can occupy the same row. Hourly events
+Hour-axis bars reserve their displayed half-open intervals when sharing rows:
+a 07:00–09:17 event and a 09:17–11:00 event can occupy the same row. Hourly events
 are placed by start time, with longer events first at an equal start, so a
 short event can reuse a row underneath a longer one. This follows the
 [exclusive end convention](https://fullcalendar.io/docs/event-parsing).
@@ -199,17 +199,28 @@ each input column. Each entry contains the full cell event list, `rowCount`
 and `hiddenCount`. All events initially count as hidden; placing a bar subtracts
 it from the hidden count in each column it draws over and reserves space through
 its highest occupied row. This same calculation serves day and hour axes.
-Multiple successive events in one hour do not add rows or produce a false
-“more” count. A bar truncated to later columns counts as hidden only in the
-earlier columns it cannot draw. Day-axis bars still reserve whole days.
+Successive events whose displayed ranges do not overlap reuse a row without
+producing a false “more” count. A bar truncated to later columns counts as
+hidden only in the earlier columns it cannot draw. Day-axis bars still reserve
+whole days.
 
 `useProcessedWeekEvents` keys these entries for the cells, without scanning the
 placements again. Cells display the supplied counts and use the full event
 list for the overflow dialog; they do not fetch or calculate counts themselves.
 
-The CSS minimum width can still enlarge short hourly bars beyond their reserved
-ranges. Minimum-width-aware packing is a separate follow-up; the shared-packer
-refactor does not change bar styling.
+Short hourly bars reserve at least 0.4 of a column (24 minutes on an hour axis),
+before the renderer's normal spacing insets. The layout applies this minimum
+once, using the same edges to choose a row and draw the bar; there is no CSS
+`minWidth`. A short bar can therefore require another row even when its actual
+times do not overlap its neighbor. Its start stays accurate, and the minimum
+is clipped at the visible grid's right edge rather than shifting the bar left.
+Day axes still use whole columns, and zero-duration events keep their existing
+whole-column fallback.
+
+A minimum-length extension into another column reserves height there but does
+not add the event to that column's scheduled event list or reduce its hidden
+count. Event timestamps, overflow dialog membership and edit callbacks retain
+the original times. Drag mirrors consume the same adjusted layout and styling.
 
 ### The now-line and week numbers
 

@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from '@playwright/test'
-import { formDialog, pickTime, saveForm } from './support/event-form'
+import { formDialog, pickTime, saveForm, timeShown } from './support/event-form'
 import {
 	gotoScenario,
 	releasePointer,
@@ -58,6 +58,235 @@ test.describe('horizontal row packing', () => {
 		end,
 		resourceId: 'r1',
 	})
+
+	for (const [view, firstEnd, nextStart, expectedOffset] of [
+		['day', '09:01', '09:01', 25],
+		['day', '09:01', '09:23', 25],
+		['day', '09:01', '09:24', 0],
+		['day', '09:15', '09:15', 25],
+		['week', '09:01', '09:01', 25],
+	] as const) {
+		test(`${view}: minimum bar footprint before ${nextStart} determines the row`, async ({
+			page,
+		}) => {
+			const events = [
+				packingEvent('minimum-a', '09:00', firstEnd),
+				packingEvent('minimum-b', nextStart, '10:00'),
+				packingEvent('minimum-independent', '09:00', '09:01', 'r2'),
+			]
+			const seed = JSON.stringify(events)
+			await gotoScenario(page, {
+				scenario: 'horizontal-packing',
+				view,
+				orientation: 'horizontal',
+				plugins: ['recurrence', 'agenda', 'drag-to-create'],
+				settings: {
+					seed,
+					granularity: 'hourly',
+					dayMaxEvents: 3,
+					height: '600px',
+					scrollToNow: 'true',
+				},
+			})
+			await settleAnimations(page)
+			const offset = await rowDifference(page, 'minimum-a', 'minimum-b')
+			expect(offset).toBe(expectedOffset)
+			const first = bar(page, 'minimum-a')
+			const firstBox = await boundsOf(first)
+			const width = await first.evaluate((element) => {
+				const parent = element.parentElement
+				if (!parent) throw new Error('Event layer missing')
+				return (parent.getBoundingClientRect().width / 24) * 0.4 - 4
+			})
+			expect(firstBox.width).toBeCloseTo(width, 1)
+			const independent = await boundsOf(bar(page, 'minimum-independent'))
+			const resource = await boundsOf(row(page, 'r2'))
+			expect(independent.y - resource.y).toBe(1)
+			await expectFitsRow(page, 'minimum-b')
+			const calendar = new CalendarPage(page)
+			const stored = await calendar.eventNamed('minimum-a')
+			const expectedEnd = `2025-03-12T${firstEnd}:00.000Z`
+			expect(stored.end).toBe(expectedEnd)
+			await expect(first).toHaveCSS('min-width', '0px')
+			if (view === 'day') {
+				await page.setViewportSize({ width: 390, height: 844 })
+				await first.scrollIntoViewIfNeeded()
+				await settleAnimations(page)
+				const mobileOffset = await rowDifference(page, 'minimum-a', 'minimum-b')
+				expect(mobileOffset).toBe(expectedOffset)
+			}
+		})
+	}
+
+	for (const withHidden of [false, true]) {
+		test(`minimum bar spill reserves height and preserves overflow (hidden=${withHidden})`, async ({
+			page,
+		}) => {
+			const events = [
+				packingEvent('minimum-blocker', '09:00', '10:00'),
+				packingEvent('minimum-short', '09:50', '09:51'),
+			]
+			if (withHidden) {
+				events.push(
+					packingEvent('minimum-next', '10:00', '11:00'),
+					packingEvent('minimum-hidden', '10:01', '11:00')
+				)
+			}
+			const seed = JSON.stringify(events)
+			await gotoScenario(page, {
+				scenario: 'horizontal-packing',
+				view: 'day',
+				orientation: 'horizontal',
+				settings: { seed, dayMaxEvents: 2, eventHeight: 48, height: '200px' },
+			})
+			await settleAnimations(page)
+			const cell = row(page).getByTestId('day-cell-2025-03-12-10-00')
+			const placeholders = cell
+				.getByTestId('grid-cell-content')
+				.locator(':scope > div.w-full.shrink-0')
+			await expect(placeholders).toHaveCount(2)
+			await expectFitsRow(page, 'minimum-short')
+			const more = cell.getByRole('button', { name: '+1 more', exact: true })
+			if (withHidden) {
+				await more.click()
+				const dialog = page.getByRole('dialog')
+				await expect(
+					dialog.getByText('minimum-next', { exact: true })
+				).toBeVisible()
+				await expect(
+					dialog.getByText('minimum-hidden', { exact: true })
+				).toBeVisible()
+				await expect(
+					dialog.getByText('minimum-short', { exact: true })
+				).toHaveCount(0)
+			} else {
+				await expect(more).toHaveCount(0)
+			}
+		})
+	}
+
+	test('minimum bar clips to the visible right edge', async ({ page }) => {
+		const seed = JSON.stringify([
+			packingEvent('minimum-edge', '11:59', '12:00'),
+		])
+		await gotoScenario(page, {
+			scenario: 'horizontal-packing',
+			view: 'day',
+			orientation: 'horizontal',
+			settings: { seed, slotMinTime: '09:00', slotMaxTime: '12:00' },
+		})
+		await settleAnimations(page)
+		const target = bar(page, 'minimum-edge')
+		const width = Number(await target.getAttribute('data-width'))
+		const left = Number(await target.getAttribute('data-left'))
+		expect(width).toBeCloseTo(100 / 180, 8)
+		expect(left + width).toBeCloseTo(100, 8)
+		const bounds = await boundsOf(target)
+		const layerRight = await target.evaluate((element) => {
+			const parent = element.parentElement
+			if (!parent) throw new Error('Event layer missing')
+			return parent.getBoundingClientRect().right
+		})
+		expect(bounds.x + bounds.width).toBeCloseTo(layerRight - 3, 1)
+		await expect(target).toHaveCSS('min-width', '0px')
+	})
+
+	for (const interaction of ['edit', 'move', 'resize'] as const) {
+		test(`minimum bar supports pointer ${interaction} with actual event times`, async ({
+			page,
+		}) => {
+			const seed = JSON.stringify([
+				packingEvent('minimum-short', '09:00', '09:01'),
+				packingEvent('minimum-next', '09:01', '10:00'),
+			])
+			await gotoScenario(page, {
+				scenario: 'horizontal-packing',
+				view: 'day',
+				orientation: 'horizontal',
+				settings: { seed, snapDuration: 15 },
+			})
+			await settleAnimations(page)
+			const calendar = new CalendarPage(page)
+			const eventBar = bar(page, 'minimum-short')
+			const target =
+				interaction === 'resize'
+					? eventBar.locator('[data-resize-handle="end"]')
+					: eventBar
+			await target.scrollIntoViewIfNeeded()
+			await settleAnimations(page)
+			const bounds = await boundsOf(target)
+			const point = {
+				x: bounds.x + bounds.width / 2,
+				y: bounds.y + bounds.height / 2,
+			}
+			const isTargetUnderPointer = await target.evaluate(
+				(element, position) =>
+					element.contains(document.elementFromPoint(position.x, position.y)),
+				point
+			)
+			expect(isTargetUnderPointer).toBe(true)
+			await page.mouse.move(point.x, point.y, { steps: 8 })
+			if (interaction === 'edit') {
+				await page.mouse.click(point.x, point.y)
+				const actualEnd = await timeShown(page, 'end')
+				expect(actualEnd).toBe('9:01 AM')
+				await pickTime(page, 'end', '9:30 AM')
+				await saveForm(page)
+			} else {
+				const hour = interaction === 'move' ? '10' : '09'
+				const cell = row(page).locator(
+					`[data-start="2025-03-12T${hour}:00:00.000Z"]`
+				)
+				const cellBounds = await boundsOf(cell)
+				const fraction = interaction === 'move' ? 0.125 : 0.7
+				const destination = {
+					x: cellBounds.x + cellBounds.width * fraction,
+					y: cellBounds.y + cellBounds.height - 8,
+				}
+				const isCellUnderPointer = await cell.evaluate(
+					(element, position) =>
+						element.contains(document.elementFromPoint(position.x, position.y)),
+					destination
+				)
+				expect(isCellUnderPointer).toBe(true)
+				const initialBar = await boundsOf(eventBar)
+				await page.mouse.down()
+				await page.mouse.move(destination.x, destination.y, { steps: 12 })
+				await expect(calendar.dragMirror).toHaveCount(1)
+				if (interaction === 'move') {
+					const preview = await boundsOf(calendar.dragMirror)
+					expect(preview.width).toBeCloseTo(initialBar.width, 1)
+					await expect(calendar.dragMirror).toHaveCSS('min-width', '0px')
+				}
+				await releasePointer(page)
+			}
+			await expect
+				.poll(async () => (await calendar.eventChanges()).length)
+				.toBe(1)
+			const updated = await calendar.eventNamed('minimum-short')
+			const expectedStart =
+				interaction === 'move'
+					? '2025-03-12T10:00:00.000Z'
+					: '2025-03-12T09:00:00.000Z'
+			const expectedEnds = {
+				edit: '2025-03-12T09:30:00.000Z',
+				move: '2025-03-12T10:01:00.000Z',
+				resize: '2025-03-12T09:45:00.000Z',
+			}
+			expect(updated.start).toBe(expectedStart)
+			expect(updated.end).toBe(expectedEnds[interaction])
+			expect(updated.resourceId).toBe('r1')
+			const [change] = await calendar.eventChanges()
+			expect(change).toMatchObject({
+				action: 'update',
+				event: 'minimum-short',
+				updated: ['minimum-short'],
+				added: [],
+				deleted: [],
+			})
+			await expectFitsRow(page, 'minimum-short')
+		})
+	}
 
 	for (const view of ['day', 'week', 'month'] as const) {
 		test(`${view}: cell counts follow placed rows and missing prefixes`, async ({
@@ -306,10 +535,10 @@ test.describe('horizontal row packing', () => {
 			page,
 		}) => {
 			const events = [
-				packingEvent('packing-a', '09:01', '09:17'),
-				packingEvent('packing-b', '09:17', '09:59'),
+				packingEvent('packing-a', '09:01', '09:25'),
+				packingEvent('packing-b', '09:25', '09:59'),
 			]
-			if (hidden) events.push(packingEvent('packing-hidden', '09:18', '09:45'))
+			if (hidden) events.push(packingEvent('packing-hidden', '09:26', '09:45'))
 			const seed = JSON.stringify(events)
 			const settings = {
 				seed,

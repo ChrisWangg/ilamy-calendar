@@ -165,8 +165,9 @@ parameter; `'none'` leaves the calendar's `timezone` prop unset, so it falls bac
 
 The horizontal packing cases open `scenario=horizontal-packing` with `view=day`
 and `orientation=horizontal` to reproduce the 07:00–09:17 / 09:17–11:00 handoff.
-URL settings and seeded event lists cover nested chains, row heights, overflow
-and day-grid behavior. Pointer edits and resizes read the harness's published
+URL settings and seeded event lists cover nested chains, minimum-length bar
+collisions, spillover row heights, overflow and day-grid behavior. Pointer edits,
+moves and resizes read the harness's published
 event state and change log; these fixture-driven tests do not inspect React's
 internal tree. The demo project keeps its default-settings smoke tests.
 

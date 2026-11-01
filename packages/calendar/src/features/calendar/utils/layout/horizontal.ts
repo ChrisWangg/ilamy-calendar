@@ -57,14 +57,17 @@ interface Range {
 	end: number
 }
 
+const MINIMUM_BAR_COLUMNS = 0.4
+
 /**
  * Where a bar starts and ends, in columns. A day axis draws whole days, as a
  * month row does. An hour axis draws the event's exact times, as FullCalendar's
  * timeline does (`computeMsSlotCoverage` adds the remainder within a slot):
  * drawing whole hours made a 10:27-12:27 event look three hours long.
  *
- * Each end is measured inside its own column. An event with no length keeps its
- * whole column rather than vanishing.
+ * Short bars reserve their minimum displayed length for both packing and
+ * drawing. Each end is measured inside its own column; a zero-length event
+ * keeps its whole column rather than vanishing.
  */
 const computeBarEdges = (
 	event: CalendarEvent,
@@ -73,23 +76,30 @@ const computeBarEdges = (
 	columnInstants: number[] | null
 ): Range => {
 	const wholeColumns = { start: startCol, end: endCol + 1 }
-	const startColumnInstant = columnInstants?.at(startCol)
-	const endColumnInstant = columnInstants?.at(endCol)
+	if (!columnInstants) return wholeColumns
+	const startColumnInstant = columnInstants.at(startCol)
+	const endColumnInstant = columnInstants.at(endCol)
 	if (startColumnInstant === undefined || endColumnInstant === undefined) {
 		return wholeColumns
 	}
 
-	const hoursIntoStartColumn =
-		(event.start.valueOf() - startColumnInstant) / MS_PER_HOUR
-	const hoursIntoEndColumn =
-		(event.end.valueOf() - endColumnInstant) / MS_PER_HOUR
-	const startOffset = Math.min(Math.max(hoursIntoStartColumn, 0), 1)
-	const endOffset = Math.min(Math.max(hoursIntoEndColumn, 0), 1)
-	const start = startCol + startOffset
-	const end = endCol + endOffset
+	const msIntoStartColumn = event.start.valueOf() - startColumnInstant
+	const msIntoEndColumn = event.end.valueOf() - endColumnInstant
+	const startOffset = Math.min(Math.max(msIntoStartColumn, 0), MS_PER_HOUR)
+	const endOffset = Math.min(Math.max(msIntoEndColumn, 0), MS_PER_HOUR)
+	// Add the minimum before converting to columns so touching edges use the
+	// same division, without floating-point addition making them overlap.
+	const startMs = startCol * MS_PER_HOUR + startOffset
+	const endMs = endCol * MS_PER_HOUR + endOffset
+	const hasLength = endMs > startMs
+	if (!hasLength) return wholeColumns
 
-	const hasLength = end > start
-	return hasLength ? { start, end } : wholeColumns
+	const minimumEndMs = startMs + MINIMUM_BAR_COLUMNS * MS_PER_HOUR
+	const gridEndMs = columnInstants.length * MS_PER_HOUR
+	const displayedEndMs = Math.min(Math.max(endMs, minimumEndMs), gridEndMs)
+	const start = startMs / MS_PER_HOUR
+	const end = displayedEndMs / MS_PER_HOUR
+	return { start, end }
 }
 
 // --- Phase 3: place (shared row ranges) -------------------------------------
@@ -208,11 +218,19 @@ export const layoutHorizontal = ({
 	}: PlaceArgs) => {
 		rows.at(row)?.push(edges)
 		const requiredRows = row + 1
+		const displayedStartCol = Math.floor(edges.start)
+		const displayedEndCol = Math.ceil(edges.end) - 1
+		for (let col = displayedStartCol; col <= displayedEndCol; col++) {
+			const cell = columnLayouts.at(col)
+			if (!cell) continue
+			cell.rowCount = Math.max(cell.rowCount, requiredRows)
+		}
+		// Displayed extensions reserve height but do not add scheduled events to
+		// another column's overflow list or reduce its hidden count.
 		for (let col = startCol; col <= endCol; col++) {
 			const cell = columnLayouts.at(col)
 			if (!cell) continue
 			const remainingHiddenCount = cell.hiddenCount - 1
-			cell.rowCount = Math.max(cell.rowCount, requiredRows)
 			cell.hiddenCount = Math.max(0, remainingHiddenCount)
 		}
 		const spanUnits = edges.end - edges.start
