@@ -166,15 +166,20 @@ Installing is a deliberate step because a plugin runs code with your user privil
 this repo leaves it to you. Once per machine:
 
 ```bash
-claude plugin install code-review@kc-claude-kit
-claude plugin install conventions@kc-claude-kit
-claude plugin install instructions@kc-claude-kit
-claude plugin install testing@kc-claude-kit
-claude plugin install usage-band@kc-claude-kit
-claude plugin install image-preview@kc-claude-kit
+claude plugin install kc-gates@kc-claude-kit
+claude plugin install kc-conventions@kc-claude-kit
+claude plugin install kc-instructions@kc-claude-kit
+claude plugin install kc-verify@kc-claude-kit
+claude plugin install kc-usage-band@kc-claude-kit
+claude plugin install kc-image-preview@kc-claude-kit
 ```
 
-They load from the next session, or after `/reload-plugins`.
+`claude plugin install` takes one plugin per call, so run each line. They load from the
+next session, or after `/reload-plugins`. A plugin cannot ship rules, so the kit's
+conventions load only as rule files: run `/kc-conventions:kc-init` once to copy them into
+this repo's `.claude/rules/`, or install them for every project into `~/.claude/rules/`
+as the kit's README describes. The kit's session-start hook says when they are missing or
+older than the plugin.
 
 ## Commands
 
@@ -279,7 +284,7 @@ examples/       standalone consumer apps (astro, nextjs, vite) depending on the 
 
 `@ilamy/calendar` ships these entry points: `.` (core), `./testing` (test harness), `./plugins/recurrence`, `./plugins/agenda`, `./plugins/drag-to-create`. The plugin subpaths' `import … from '@ilamy/calendar'` self-references the same package at runtime. **It ships no CSS** — "bring your own design system": components use the conventional shadcn token classes, and consumers `@source` the package's `dist` so Tailwind generates the utilities, styled by their own tokens. The demo (`apps/demo/src/styles/globals.css`) is the reference consumer that supplies a shadcn theme.
 
-Paths in the **Key Paths** section below are relative to `packages/calendar/`. Run scripts at the repo root (they fan out via `bun run --filter '*' …`) or inside a single package. Build resolution: calendar's bunup `noExternal`s the internal `@ilamy/*` packages (resolved to source via tsconfig `paths`) so they're bundled in; their third-party deps (react, radix, clsx, rrule, …) stay external and are declared in calendar's `dependencies`. **`bun run ci` builds before type-check/test** (the plugin packages + demo resolve `@ilamy/calendar` through its built `dist/*.d.ts`).
+Paths in the **Key Paths** section below are relative to `packages/calendar/`. Run scripts at the repo root (they fan out via `bun run --filter '*' …`) or inside a single package. Build resolution: calendar's bunup `noExternal`s the internal `@ilamy/*` packages (resolved to source via each package's own tsconfig `paths`: Bun reads the tsconfig nearest the importing file) so they're bundled in; their third-party deps (react, radix, clsx, rrule, …) stay external and are declared in calendar's `dependencies`. **`bun run ci` builds before type-check/test** (the plugin packages + demo resolve `@ilamy/calendar` through its built `dist/*.d.ts`).
 
 ### Data Flow
 
@@ -498,8 +503,8 @@ different setting.
 
 ## Code review
 
-Reviews use the `code-review:review-code` skill from the `kc-claude-kit` plugin
-([source](https://github.com/kcsujeet/kc-claude-kit/tree/main/plugins/code-review)),
+Reviews use the `kc-gates:kc-code-review` skill from the `kc-claude-kit` marketplace
+([source](https://github.com/kcsujeet/kc-claude-kit/tree/main/plugins/kc-gates)),
 installed as described under Session Start. It triggers on "review this PR", a PR URL
 or a branch name, runs one gate agent per rule file, and never posts to GitHub on its
 own. Two competitors are switched off for this repo in `.claude/settings.json`: the
